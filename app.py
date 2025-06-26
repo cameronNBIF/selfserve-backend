@@ -104,7 +104,7 @@ def run_query():
 
 @app.route('/user-info', methods=['GET'])
 def get_user_info():
-    """Getting information about the authenticated user"""
+    """Get information about the authenticated user"""
     auth_header = request.headers.get('Authorization')
     if not auth_header:
         return jsonify({"error": "Missing Authorization header"}), 401
