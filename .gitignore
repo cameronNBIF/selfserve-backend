@@ -1,0 +1,12 @@
+# Python - backend/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.db
+*.log
+.env
+.env.*
+
+.python_packages
+.venv
