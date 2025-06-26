@@ -6,6 +6,8 @@ import os
 import jwt
 import requests
 import struct
+import time
+import random
 
 app = Flask(__name__)
 CORS(app)
@@ -57,16 +59,28 @@ def validate_and_get_sql_token(auth_header):
         return access_token, user_principal_name
 
 def get_connection_with_user_token(auth_header):
-    """Create database connection using the user's token"""
     sql_token, user_name = validate_and_get_sql_token(auth_header)
     
     token_bytes = sql_token.encode("utf-16-le")
     token_struct = struct.pack(f'<I{len(token_bytes)}s', len(token_bytes), token_bytes)
     
-    connection_string = f'DRIVER={driver};SERVER=tcp:{server},1433;DATABASE={database};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;'
+    connection_string = f'DRIVER={driver};SERVER=tcp:{server},1433;DATABASE={database};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;Login Timeout=30;Command Timeout=30;'
     
     conn = pyodbc.connect(connection_string, attrs_before={1256: token_struct})
     return conn, user_name
+
+def get_connection_with_retry(auth_header, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            return get_connection_with_user_token(auth_header)
+        except pyodbc.Error as e:
+            error_code = e.args[0] if e.args else ''
+            if error_code == 'HYT00' and attempt < max_retries - 1:
+                wait_time = (2 ** attempt) + random.uniform(0, 1)
+                print(f"Login timeout on attempt {attempt + 1}, retrying in {wait_time:.2f} seconds...")
+                time.sleep(wait_time)
+                continue
+            raise
 
 @app.route('/query', methods=['GET'])
 def run_query():
@@ -80,8 +94,10 @@ def run_query():
         return jsonify({"error": "Missing Authorization header"}), 401
 
     try:
-        with get_connection_with_user_token(auth_header)[0] as conn:
+        conn, user_name = get_connection_with_retry(auth_header)
+        with conn:
             cursor = conn.cursor()
+            cursor.timeout = 30
 
             query = """
                 SELECT * 
@@ -99,8 +115,14 @@ def run_query():
             results = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
         return jsonify(results)
+    except pyodbc.Error as e:
+        error_msg = f"Database error: {str(e)}"
+        print(error_msg)  # Log for debugging
+        return jsonify({"error": "Database connection failed. Please try again."}), 500
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        error_msg = f"Unexpected error: {str(e)}"
+        print(error_msg)  # Log for debugging
+        return jsonify({"error": "An unexpected error occurred."}), 500
 
 @app.route('/user-info', methods=['GET'])
 def get_user_info():
